@@ -15,12 +15,22 @@ Linux.do Cookie 导出工具
 可选参数：
     --output cookies.json   把 cookies 同时写入文件
     --proxy 127.0.0.1:7897  使用代理打开页面
+    --chrome-path <path>    指定 Chrome 路径（或用 CHROME_PATH 环境变量）
+    --incognito             用一个全新的临时浏览器会话登录，跑完即清理；
+                            适合切换到不同账号、或不想被日常 Chrome 已有
+                            登录态干扰的场景
 
 流程：
     1. 脚本会自动打开浏览器，跳到 https://linux.do/login
     2. 你在浏览器里手动登录（账号密码 / OAuth / 邮箱验证码都行）
     3. 登录成功后回到终端按回车
     4. 脚本会读取 cookies 并打印一行 JSON，复制它去 GitHub Secrets
+
+多账号示例：
+    # A 账号
+    python extract_cookies.py --incognito -o cookies-a.json
+    # B 账号（互不影响）
+    python extract_cookies.py --incognito -o cookies-b.json
 
 ================================================================================
 """
@@ -29,7 +39,10 @@ import argparse
 import json
 import os
 import platform
+import shutil
+import socket
 import sys
+import tempfile
 
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
@@ -89,7 +102,14 @@ def _find_chrome_path():
     return None
 
 
-def extract_cookies(proxy=None, output=None, chrome_path=None):
+def _pick_free_port():
+    """让内核分配一个空闲 TCP 端口，把它给 DrissionPage 用作调试端口"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def extract_cookies(proxy=None, output=None, chrome_path=None, incognito=False):
     print("启动浏览器...")
     opts = ChromiumOptions()
     opts.set_argument("--window-size=1280,900")
@@ -102,6 +122,19 @@ def extract_cookies(proxy=None, output=None, chrome_path=None):
     else:
         print("警告: 未自动找到 Chrome 路径，DrissionPage 会用默认探测，"
               "若启动失败请设置 CHROME_PATH 环境变量或加 --chrome-path 参数。")
+
+    # --incognito: 用一个全新的临时 user-data-dir，跑完即删，不复用任何已有登录态
+    # 适合需要切换账号登录的场景（不会被你日常 Chrome 里已登录的账号干扰）
+    temp_profile = None
+    if incognito:
+        temp_profile = tempfile.mkdtemp(prefix="linuxdo-cookie-")
+        opts.set_user_data_path(temp_profile)
+        # 用一个真实空闲端口，避免和你日常 Chrome（默认 9222）抢；
+        # 注意 set_local_port(0) 不是"自动分配"，要自己给真实端口号
+        port = _pick_free_port()
+        opts.set_local_port(port)
+        print(f"独立会话: {temp_profile}")
+        print(f"调试端口: {port}")
 
     if proxy:
         opts.set_proxy(proxy)
@@ -173,6 +206,9 @@ def extract_cookies(proxy=None, output=None, chrome_path=None):
             page.quit()
         except Exception:
             pass
+        # 清理临时 profile 目录
+        if temp_profile and os.path.isdir(temp_profile):
+            shutil.rmtree(temp_profile, ignore_errors=True)
 
 
 def main():
@@ -183,11 +219,21 @@ def main():
         "--chrome-path",
         help="Chrome 可执行文件完整路径，覆盖自动探测；也可用 CHROME_PATH 环境变量",
     )
+    parser.add_argument(
+        "--incognito",
+        "--fresh",
+        action="store_true",
+        help="使用全新的临时浏览器会话（不复用日常 Chrome 的登录态），"
+        "适合切换账号登录；跑完临时数据自动清理",
+    )
     args = parser.parse_args()
 
     sys.exit(
         extract_cookies(
-            proxy=args.proxy, output=args.output, chrome_path=args.chrome_path
+            proxy=args.proxy,
+            output=args.output,
+            chrome_path=args.chrome_path,
+            incognito=args.incognito,
         )
     )
 
