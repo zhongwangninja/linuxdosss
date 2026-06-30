@@ -196,6 +196,18 @@ class Logger:
             print(f"[{self._timestamp()}] [DEBUG] {msg}")
 
 
+class ErrorCaptureLogger(Logger):
+    """在普通 Logger 基础上收集 error 日志，供任务结束后写入通知邮件正文。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.errors = []
+
+    def error(self, msg):
+        self.errors.append(msg)
+        super().error(msg)
+
+
 # ============================================================================
 # 核心类
 # ============================================================================
@@ -714,8 +726,8 @@ def main():
     """主函数"""
     args = parse_args()
 
-    # 创建日志工具
-    logger = Logger(debug=args.debug)
+    # 创建日志工具（顺便收集 error，用于通知邮件正文）
+    logger = ErrorCaptureLogger(debug=args.debug)
 
     # 获取认证信息（优先 cookies，其次账号密码）
     cookies = _load_cookies(args.cookies, args.cookies_file, logger)
@@ -757,12 +769,36 @@ def main():
         logger=logger,
     )
 
-    stats = bot.run(
-        target_topics=args.topics, headless=not args.no_headless, proxy=proxy
-    )
+    run_start = time.time()
+    try:
+        stats = bot.run(
+            target_topics=args.topics, headless=not args.no_headless, proxy=proxy
+        )
+        success = stats["topics"] > 0
+    except Exception as e:
+        logger.error(f"主流程异常: {e}")
+        stats = {"topics": 0, "likes": 0, "floors": 0}
+        success = False
+    elapsed = time.time() - run_start
+
+    # 发送执行结果通知（仅当配置了 EMAIL_CONFIG 时）
+    email_config = os.environ.get("EMAIL_CONFIG")
+    if email_config:
+        try:
+            from notifier import notify_linuxdo_result
+
+            notify_linuxdo_result(
+                success=success,
+                stats=stats,
+                elapsed=elapsed,
+                error_messages=logger.errors,
+                email_config=email_config,
+            )
+        except Exception as e:
+            logger.error(f"发送通知失败: {e}")
 
     # 返回状态码
-    sys.exit(0 if stats["topics"] > 0 else 1)
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
