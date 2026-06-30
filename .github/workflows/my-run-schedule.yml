@@ -188,6 +188,7 @@ jobs:
           LINUXDO_COOKIES: ${{ secrets.LINUXDO_COOKIES }}
           LINUXDO_USERNAME: ${{ secrets.LINUXDO_USERNAME }}
           LINUXDO_PASSWORD: ${{ secrets.LINUXDO_PASSWORD }}
+          EMAIL_CONFIG: ${{ EMAIL_CONFIG }}
           # LINUXDO_PROXY 由上一步注入到 GITHUB_ENV，未启用代理时为空
         run: |
           # 获取参数（手动触发时使用输入值，定时触发时使用默认值）
